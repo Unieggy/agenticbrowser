@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agentic Browser</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Agentic Browser</h1>
+    </header>
+
+    <div class="main-content">
+      <!-- Task Input Section -->
+      <section class="task-section">
+        <h2>Task</h2>
+        <div class="task-controls">
+          <textarea id="taskInput" placeholder="Enter your task (e.g., 'Click the first link on the page')" rows="3"></textarea>
+          <div class="button-group">
+            <button id="startBtn" class="btn btn-primary">Start Task</button>
+            <button id="stopBtn" class="btn btn-danger" disabled>Stop Task</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Screenshot Section -->
+      <section class="screenshot-section">
+        <h2>Live Screenshot</h2>
+        <div class="screenshot-container">
+          <img id="screenshotImg" src="" alt="Browser screenshot" />
+          <div id="screenshotPlaceholder" class="placeholder">
+            No screenshot available yet
+          </div>
+        </div>
+      </section>
+
+      <!-- Step Log Section -->
+      <section class="log-section">
+        <h2>Step Log</h2>
+        <div id="stepLog" class="log-container"></div>
+      </section>
+
+      <!-- Needs You Panel -->
+      <section id="needsYouPanel" class="needs-you-section" style="display: none;">
+        <h2>Needs You</h2>
+        <div class="needs-you-content">
+          <p id="needsYouMessage"></p>
+          <div class="button-group">
+            <button id="confirmBtn" class="btn btn-primary">Confirm</button>
+            <button id="cancelBtn" class="btn btn-secondary">Cancel</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script type="module" src="/app.ts"></script>
+</body>
+</html>
+
