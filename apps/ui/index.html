@@ -7,42 +7,63 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <div class="container">
-    <header>
+  <div class="app-shell">
+    <!-- Header Banner -->
+    <header class="app-header">
       <h1>Agentic Browser</h1>
     </header>
 
-    <div class="main-content">
-      <!-- Task Input Section -->
-      <section class="task-section">
-        <h2>Task</h2>
-        <div class="task-controls">
-          <textarea id="taskInput" placeholder="Enter your task (e.g., 'Click the first link on the page')" rows="3"></textarea>
-          <div class="button-group">
-            <button id="startBtn" class="btn btn-primary">Start Task</button>
-            <button id="stopBtn" class="btn btn-danger" disabled>Stop Task</button>
+    <div class="container">
+      <div class="main-content">
+        <!-- Left Side: Task Area (2/5 width) -->
+        <div class="left-panel">
+          <section class="task-section">
+            <h2>What's your task?</h2>
+            <div class="task-controls">
+              <textarea id="taskInput" placeholder="Enter your task (e.g., 'Click the first link on the page')" rows="4"></textarea>
+              <div class="button-row">
+                <div class="button-group">
+                  <button id="startBtn" class="btn btn-primary">Start Task</button>
+                  <button id="stopBtn" class="btn btn-danger" disabled>Stop Task</button>
+                </div>
+                <button id="logToggle" class="btn-toggle" title="Toggle log panel">
+                  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M7 4L13 10L7 16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- Right Side: Screenshot + Log (3/5 width) -->
+        <div class="right-panel">
+          <!-- Screenshot Section (top, dominant) -->
+          <section class="screenshot-section">
+            <div class="browser-tab-bar">
+              <div class="tab-indicator"></div>
+            </div>
+            <h2>Live Screenshot</h2>
+            <div class="screenshot-container">
+              <img id="screenshotImg" src="" alt="Browser screenshot" />
+              <div id="screenshotPlaceholder" class="placeholder">
+                <div class="placeholder-text">No screenshot available yet</div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Log Section (bottom, 1/4 height, toggleable) -->
+          <div id="logContainer" class="log-container-wrapper">
+            <section class="log-section">
+              <h2>Step Log</h2>
+              <div id="stepLog" class="log-container"></div>
+            </section>
           </div>
         </div>
-      </section>
+      </div>
 
-      <!-- Screenshot Section -->
-      <section class="screenshot-section">
-        <h2>Live Screenshot</h2>
-        <div class="screenshot-container">
-          <img id="screenshotImg" src="" alt="Browser screenshot" />
-          <div id="screenshotPlaceholder" class="placeholder">
-            No screenshot available yet
-          </div>
-        </div>
-      </section>
-
-      <!-- Step Log Section -->
-      <section class="log-section">
-        <h2>Step Log</h2>
-        <div id="stepLog" class="log-container"></div>
-      </section>
-
-      <!-- Needs You Panel -->
+      <!-- Needs You Panel (overlay/modal style) -->
+      <div id="needsYouBackdrop" class="needs-you-backdrop" style="display: none;"></div>
       <section id="needsYouPanel" class="needs-you-section" style="display: none;">
         <h2>Needs You</h2>
         <div class="needs-you-content">

@@ -4,6 +4,7 @@
 
 import { OrchestratorAPI } from './api.js';
 import type { WebSocketMessage, ScreenshotUpdate, StepLog, UserConfirmation } from './types.js';
+import { initLiquidBackground } from './liquidbg';
 
 // UI Elements
 const taskInput = document.getElementById('taskInput') as HTMLTextAreaElement;
@@ -16,16 +17,20 @@ const needsYouPanel = document.getElementById('needsYouPanel') as HTMLElement;
 const needsYouMessage = document.getElementById('needsYouMessage') as HTMLParagraphElement;
 const confirmBtn = document.getElementById('confirmBtn') as HTMLButtonElement;
 const cancelBtn = document.getElementById('cancelBtn') as HTMLButtonElement;
+const logToggle = document.getElementById('logToggle') as HTMLButtonElement;
+const logContainer = document.getElementById('logContainer') as HTMLDivElement;
+const needsYouBackdrop = document.getElementById('needsYouBackdrop') as HTMLDivElement;
 
 // State
 let api: OrchestratorAPI | null = null;
 let currentSessionId: string | null = null;
 let pendingConfirmation: { sessionId: string; step: number; actionId?: string } | null = null;
+let logVisible = true;
 
 // Initialize
 function init() {
   const wsUrl = `ws://localhost:3001/ws`;
-  
+  initLiquidBackground();
   api = new OrchestratorAPI(
     wsUrl,
     handleMessage,
@@ -50,6 +55,13 @@ function init() {
   stopBtn.addEventListener('click', handleStop);
   confirmBtn.addEventListener('click', handleConfirm);
   cancelBtn.addEventListener('click', handleCancel);
+  
+  // Log toggle
+  logToggle.addEventListener('click', () => {
+    logVisible = !logVisible;
+    logContainer.classList.toggle('hidden-log', !logVisible);
+    logToggle.classList.toggle('rotated', !logVisible);
+  });
 }
 
 function handleMessage(message: WebSocketMessage): void {
@@ -106,6 +118,7 @@ function handleConfirmation(confirmation: UserConfirmation): void {
   };
   needsYouMessage.textContent = confirmation.message;
   needsYouPanel.style.display = 'block';
+  needsYouBackdrop.style.display = 'block';
 }
 
 function handleStatus(status: any): void {
@@ -169,6 +182,7 @@ function handleConfirm(): void {
       pendingConfirmation.actionId
     );
     needsYouPanel.style.display = 'none';
+    needsYouBackdrop.style.display = 'none';
     pendingConfirmation = null;
   } catch (error) {
     console.error('Failed to send confirmation:', error);
@@ -186,6 +200,7 @@ function handleCancel(): void {
       pendingConfirmation.actionId
     );
     needsYouPanel.style.display = 'none';
+    needsYouBackdrop.style.display = 'none';
     pendingConfirmation = null;
   } catch (error) {
     console.error('Failed to send cancellation:', error);
