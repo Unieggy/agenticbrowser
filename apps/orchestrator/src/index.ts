@@ -29,6 +29,8 @@ class Orchestrator {
     agent: AgentController;
     task: string;
     stepCount: number;
+    paused: boolean;
+    pendingAction?: import('./agent/schemas.js').Action;
     wsClient?: WebSocket;
   }> = new Map();
 
@@ -60,10 +62,79 @@ class Orchestrator {
                 data: { sessionId, status: 'stopped', message: 'Task stopped by user' },
               });
             }
-          } else if (message.type === 'confirmation') {
+          } else if (message.type === 'confirmation'){
             const confirmation = message.data as UserConfirmation;
-            // Handle confirmation (stubbed for now - would resume agent loop)
-            console.log(`Confirmation received: ${confirmation.message}`);
+            const sessionId = confirmation.sessionId;
+
+            const session = this.activeSessions.get(sessionId);
+            if (!session) {
+              this.sendMessage(ws, {
+                type: 'error',
+                data: { message: `Session ${sessionId} not found` },
+              });
+              return;
+            }
+
+            if (!session.paused) {
+              this.sendMessage(ws, {
+                type: 'error',
+                data: { message: `Session ${sessionId} is not paused` },
+              });
+              return;
+            }
+
+            // If user rejected confirmation
+            if (!confirmation.approved) {
+              session.paused = false;
+              session.pendingAction = undefined;
+
+              this.db.updateSessionStatus(sessionId, 'stopped');
+
+              this.sendMessage(session.wsClient, {
+                type: 'status',
+                data: {
+                  sessionId,
+                  status: 'stopped',
+                  message: 'User rejected confirmation',
+                },
+              });
+
+              // cleanup
+              await session.browser.close();
+              this.activeSessions.delete(sessionId);
+              return;
+            }
+
+            // User approved: execute the pending action
+            const action = session.pendingAction;
+            session.pendingAction = undefined;
+            session.paused = false;
+
+            // Optional: log to UI that we're executing the confirmed action
+            this.sendMessage(session.wsClient, {
+              type: 'log',
+              data: {
+                step: session.stepCount,
+                phase: 'ACT',
+                message: action
+                ?'User approved. Executing confirmed action.': 'User approved. Resuming after manual confirmation.',
+                timestamp: new Date().toISOString(),
+              },
+            });
+
+            if(action){
+              await session.agent.executeAction(action);
+            }
+
+            // Resume agent loop from current page state
+            this.runAgentLoop(sessionId).catch((error) => {
+              console.error(`Agent loop error for session ${sessionId}:`, error);
+              this.sendMessage(session.wsClient, {
+                type: 'error',
+                data: { message: error instanceof Error ? error.message : String(error) },
+              });
+              this.db.updateSessionStatus(sessionId, 'error');
+            });
           }
         } catch (error) {
           console.error('Error handling WebSocket message:', error);
@@ -105,7 +176,7 @@ class Orchestrator {
     const regionizer = new Regionizer(domTools);
     const guardrails = new Guardrails();
     const verifier = new Verifier(domTools);
-    const agent = new AgentController(domTools, guardrails, verifier);
+    const agent = new AgentController(domTools, regionizer, guardrails, verifier);
 
     // Store session
     this.activeSessions.set(sessionId, {
@@ -116,6 +187,8 @@ class Orchestrator {
       agent,
       task,
       stepCount: 0,
+      paused: false,
+      pendingAction: undefined,
       wsClient,
     });
 
@@ -142,13 +215,28 @@ class Orchestrator {
 
   private async runAgentLoop(sessionId: string): Promise<void> {
     const session = this.activeSessions.get(sessionId);
+
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
     }
-
-    const { browser, screenshotManager, domTools, regionizer, agent, task, wsClient } = session;
-
+    const { regionizer, screenshotManager, wsClient, agent, task, browser } = session;
+    const currenturl=session.domTools.getUrl();
+    if(currenturl.includes('accounts.google.com')){
+      session.paused=true;
+      session.pendingAction=undefined;
+      this.db.updateSessionStatus(sessionId, 'paused');
+      this.sendMessage(wsClient, {
+        type:'status',
+        data:{
+          sessionId,
+          status:'paused',
+          message:'Please complete the login challenge manually to continue.',
+        }
+      });
+      return;
+    }
     // Initial observation
+
     const regions = await regionizer.detectRegions();
     const observation = regionizer.getObservationSummary(regions);
 
@@ -171,7 +259,6 @@ class Orchestrator {
     // Run agent loop
     const result = await agent.runLoop(
       task,
-      regions,
       async (phase, message, action) => {
         session.stepCount++;
         const stepNumber = session.stepCount;
@@ -218,18 +305,50 @@ class Orchestrator {
             },
           });
         }
+        // completed or failed (no pending action)
       }
     );
 
-    // Update session status
-    this.db.updateSessionStatus(sessionId, result.completed ? 'completed' : 'paused');
+    // completed=>end session
+    if(result.completed){
+      this.db.updateSessionStatus(sessionId, 'completed');
+      this.sendMessage(wsClient, {
+        type:'status',
+        data:{
+          sessionId,
+          status:'completed',
+          message: result.reason,
+        }
+      });
+      await browser.close();
+      this.activeSessions.delete(sessionId);
+      return;
 
-    // Send completion message
+    }
+    const isPaused=Boolean(result.pauseKind)||Boolean(result.pendingAction);
+    if (isPaused){
+      session.paused = true;
+      session.pendingAction = result.pendingAction;
+      this.db.updateSessionStatus(sessionId, 'paused');
+      this.sendMessage(wsClient, {
+        type: 'status',
+        data: {
+          sessionId,
+          status: 'paused',
+          message: result.reason,
+          pendingAction: result.pendingAction,
+          pauseKind: result.pauseKind
+        },
+      });
+      return;
+    }
+    this.db.updateSessionStatus(sessionId, 'error');
+
     this.sendMessage(wsClient, {
       type: 'status',
       data: {
         sessionId,
-        status: result.completed ? 'completed' : 'paused',
+        status: 'error',
         message: result.reason,
       },
     });
@@ -237,6 +356,7 @@ class Orchestrator {
     // Cleanup
     await browser.close();
     this.activeSessions.delete(sessionId);
+    return;
   }
 
   private sendMessage(wsClient: WebSocket | undefined, message: WebSocketMessage): void {
@@ -262,7 +382,6 @@ class Orchestrator {
 
 // Start orchestrator
 const orchestrator = new Orchestrator();
-orchestrator.setupWebSocketHandlers();
 orchestrator.start().catch(console.error);
 
 // Graceful shutdown

@@ -24,7 +24,7 @@ const needsYouBackdrop = document.getElementById('needsYouBackdrop') as HTMLDivE
 // State
 let api: OrchestratorAPI | null = null;
 let currentSessionId: string | null = null;
-let pendingConfirmation: { sessionId: string; step: number; actionId?: string } | null = null;
+let pendingConfirmation: { sessionId: string; actionId?: string } | null = null;
 let logVisible = true;
 
 // Initialize
@@ -72,9 +72,6 @@ function handleMessage(message: WebSocketMessage): void {
     case 'log':
       handleLog(message.data as StepLog);
       break;
-    case 'confirmation':
-      handleConfirmation(message.data as UserConfirmation);
-      break;
     case 'status':
       handleStatus(message.data as any);
       break;
@@ -110,23 +107,42 @@ function handleLog(log: StepLog): void {
   addLogEntry(log.phase.toLowerCase() as any, log.message, log.error);
 }
 
-function handleConfirmation(confirmation: UserConfirmation): void {
-  pendingConfirmation = {
-    sessionId: confirmation.sessionId,
-    step: confirmation.step,
-    actionId: confirmation.actionId,
-  };
-  needsYouMessage.textContent = confirmation.message;
-  needsYouPanel.style.display = 'block';
-  needsYouBackdrop.style.display = 'block';
-}
 
 function handleStatus(status: any): void {
   if (status.sessionId) {
     currentSessionId = status.sessionId;
   }
+
   addLogEntry('observe', status.message || 'Status update');
+
+  // If orchestrator paused due to confirmation, show Needs You panel
+  if (status.status === 'paused' && currentSessionId) {
+    pendingConfirmation = {
+      sessionId: currentSessionId,
+      actionId: status.pendingAction?.actionId,
+    };
+
+    //show a clearer message depending on pauseKind
+    if(status.pauseKind==='ASK_USER'){
+      needsYouMessage.textContent = status.message || 'Please complete the required step in the browser';
+    }
+    else if(status.pauseKind==='CONFIRM'){
+      needsYouMessage.textContent = status.message || 'Please confirm to continue';
+    }else{
+      needsYouMessage.textContent = status.message || 'Paused. Click continue to proceed.';
+    }
+    needsYouPanel.style.display = 'block';
+    needsYouBackdrop.style.display = 'block';
+  }
+
+  // If task ended, re-enable UI controls
+  if (status.status === 'completed' || status.status === 'stopped' || status.status === 'error') {
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    taskInput.disabled = false;
+  }
 }
+
 
 function handleStart(): void {
   const task = taskInput.value.trim();
@@ -177,10 +193,10 @@ function handleConfirm(): void {
   try {
     api.sendConfirmation(
       pendingConfirmation.sessionId,
-      pendingConfirmation.step,
       true,
       pendingConfirmation.actionId
     );
+
     needsYouPanel.style.display = 'none';
     needsYouBackdrop.style.display = 'none';
     pendingConfirmation = null;
@@ -195,7 +211,6 @@ function handleCancel(): void {
   try {
     api.sendConfirmation(
       pendingConfirmation.sessionId,
-      pendingConfirmation.step,
       false,
       pendingConfirmation.actionId
     );

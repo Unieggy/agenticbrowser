@@ -197,5 +197,29 @@ export class DOMTools {
   async getPageText(): Promise<string> {
     return await this.page.textContent('body') || '';
   }
+
+  getUrl(): string {
+    return this.page.url();
+  }
+
+  async clickSelector(selector: string): Promise<void> {
+    await this.page.click(selector);
+  }
+
+    /**
+   * Fill using a CSS selector string.
+   * Useful when an action comes in as selector-based DOM_FILL.
+   */
+  async fillSelector(selector: string, value: string): Promise<void> {
+    await this.page.fill(selector, value);
+  }
+    /**
+   * Wait for the page to reach a certain load state.
+   */
+  async waitForLoadState(state: 'load' | 'domcontentloaded' | 'networkidle'): Promise<void> {
+    await this.page.waitForLoadState(state);
+  }
+
+
 }
 

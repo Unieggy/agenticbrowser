@@ -80,15 +80,14 @@ export class OrchestratorAPI {
     this.ws.send(JSON.stringify({ type: 'task', data: request }));
   }
 
-  sendConfirmation(sessionId: string, step: number, confirmed: boolean, actionId?: string): void {
+  sendConfirmation(sessionId: string, approved: boolean, actionId?: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket not connected');
     }
 
     const confirmation: UserConfirmation = {
       sessionId,
-      step,
-      message: confirmed ? 'confirmed' : 'cancelled',
+      approved,
       actionId,
     };
     this.ws.send(JSON.stringify({ type: 'confirmation', data: confirmation }));

@@ -35,21 +35,33 @@ export interface TaskRequest {
   sessionId?: string;
 }
 
+/** matches index.ts: message.type === 'stop' and message.data.sessionId */
+export interface StopRequest {
+  sessionId: string;
+}
+
 export interface TaskResponse {
   sessionId: string;
-  status: 'started' | 'running' | 'paused' | 'completed' | 'error';
+  status: 'started' | 'running' | 'paused' | 'completed' | 'error' | 'stopped';
   message?: string;
+  pendingAction?: any;
+  pauseKind?: 'ASK_USER' | 'CONFIRM';
 }
 
 export interface UserConfirmation {
   sessionId: string;
-  step: number;
-  message: string;
+  approved: boolean;
   actionId?: string;
 }
 
 export interface WebSocketMessage {
-  type: 'screenshot' | 'log' | 'confirmation' | 'status' | 'error';
-  data: ScreenshotUpdate | StepLog | UserConfirmation | TaskResponse | { message: string };
+  type: 'task' | 'stop' | 'screenshot' | 'log' | 'confirmation' | 'status' | 'error';
+  data:
+    | TaskRequest
+    | StopRequest
+    | ScreenshotUpdate
+    | StepLog
+    | UserConfirmation
+    | TaskResponse
+    | { message: string };
 }
-

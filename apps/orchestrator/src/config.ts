@@ -15,8 +15,7 @@ interface Config {
     height: number;
   };
   llm?: {
-    openaiApiKey?: string;
-    anthropicApiKey?: string;
+    geminiApiKey?: string;
   };
   vision?: {
     model?: string;
@@ -73,8 +72,7 @@ export function loadConfig(): Config {
       height: parseInt(getEnv('BROWSER_HEIGHT', '720'), 10),
     },
     llm: {
-      openaiApiKey: getEnv('OPENAI_API_KEY', ''),
-      anthropicApiKey: getEnv('ANTHROPIC_API_KEY', ''),
+      geminiApiKey: getEnv('GEMINI_API_KEY', ''),
     },
     vision: {
       model: getEnv('VISION_MODEL', ''),

@@ -46,12 +46,15 @@ export const ActionSchema = z.discriminatedUnion('type', [
     reason: z.string().optional(),
   }),
 ]);
-
 export type Action = z.infer<typeof ActionSchema>;
 
-export interface Decision {
-  action: Action;
-  reasoning: string;
-  confidence: number;
-}
+export const DecisionSchema=z.object({
+  action: ActionSchema,
+  reasoning: z.string(),
+  confidence: z.number().min(0).max(1),
+});
+
+
+
+export type Decision = z.infer<typeof DecisionSchema>;
 

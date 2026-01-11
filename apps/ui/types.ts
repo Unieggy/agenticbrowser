@@ -43,8 +43,7 @@ export interface TaskResponse {
 
 export interface UserConfirmation {
   sessionId: string;
-  step: number;
-  message: string;
+  approved: boolean;
   actionId?: string;
 }
 
