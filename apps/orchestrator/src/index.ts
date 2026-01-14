@@ -16,7 +16,8 @@ import { config } from './config.js';
 import type { WebSocketMessage, TaskRequest, UserConfirmation } from './shared/types.js';
 import { WebSocket } from 'ws';
 import { randomUUID } from 'crypto';
-
+import { planTaskWithGemini } from './agent/planner.js';
+import { tr } from 'zod/v4/locales';
 class Orchestrator {
   private server: Server;
   private db: DatabaseManager;
@@ -33,6 +34,12 @@ class Orchestrator {
     resume?: boolean;
     pendingAction?: import('./agent/schemas.js').Action;
     wsClient?: WebSocket;
+    plan: string[];
+    planIndex: number;
+    completedSteps: string[];
+    pausedForHumanObjective?: string;
+
+
   }> = new Map();
 
   constructor() {
@@ -179,6 +186,18 @@ class Orchestrator {
     const guardrails = new Guardrails();
     const verifier = new Verifier(domTools);
     const agent = new AgentController(domTools, regionizer, guardrails, verifier);
+    const plan = await planTaskWithGemini(task);
+    // Log the generated plan to the UI
+    this.sendMessage(wsClient, {
+      type: 'status',
+      data: {
+        sessionId,
+        status: 'running',
+        message:
+          'Plan created:\n' +
+          plan.map((step, i) => `[${i}] ${step}`).join('\n'),
+      },
+    });
 
     // Store session
     this.activeSessions.set(sessionId, {
@@ -192,6 +211,10 @@ class Orchestrator {
       paused: false,
       pendingAction: undefined,
       wsClient,
+      plan,
+      planIndex:0,
+      completedSteps:[],
+      pausedForHumanObjective: undefined
     });
 
     // Send status
@@ -217,26 +240,62 @@ class Orchestrator {
 
   private async runAgentLoop(sessionId: string): Promise<void> {
     const session = this.activeSessions.get(sessionId);
+    const isHumanOwnedObjective = (objective: string) => objective.trim().startsWith('[HUMAN]');
+    const isLoginLikeObjective = (objective: string) => /sign\s*in|login|mfa|otp|2fa/i.test(objective);
+
 
     if (!session) {
       throw new Error(`Session ${sessionId} not found`);
     }
     const { regionizer, screenshotManager, wsClient, agent, task, browser } = session;
-    const currenturl=session.domTools.getUrl();
-    if(currenturl.includes('accounts.google.com')){
-      session.paused=true;
-      session.pendingAction=undefined;
-      this.db.updateSessionStatus(sessionId, 'paused');
+
+    // ===== UNIVERSAL HUMAN-OWNED OBJECTIVE ENFORCEMENT =====
+    // If we are resuming from a human-owned objective, mark it complete and advance.
+    if (session.resume && session.pausedForHumanObjective) {
+      const doneObj = session.pausedForHumanObjective;
+      session.completedSteps.push(doneObj);
+      session.planIndex++;
+      session.pausedForHumanObjective = undefined;
+      session.paused = false;
+      session.resume = false;
+
       this.sendMessage(wsClient, {
-        type:'status',
-        data:{
+        type: 'status',
+        data: {
           sessionId,
-          status:'paused',
-          message:'Please complete the login challenge manually to continue.',
-        }
+          status: 'running',
+          message: `Objective completed (human): ${doneObj}`,
+        },
       });
+    }
+
+    // Recompute after possible advance
+    const objectiveNow = session.plan[session.planIndex] || '';
+
+    // If the current objective is human-owned (login/MFA), pause immediately.
+    if (isHumanOwnedObjective(objectiveNow) && isLoginLikeObjective(objectiveNow)) {
+      session.paused = true;
+      session.resume = true;
+      session.pendingAction = undefined;
+      session.pausedForHumanObjective = objectiveNow;
+
+      this.db.updateSessionStatus(sessionId, 'paused');
+
+      this.sendMessage(wsClient, {
+        type: 'status',
+        data: {
+          sessionId,
+          status: 'paused',
+          pauseKind: 'ASK_USER',
+          pendingAction: undefined,
+          message: `Please complete this step manually, then click Continue:\n${objectiveNow}`,
+        },
+      });
+
       return;
     }
+    // ===== END HUMAN-OWNED ENFORCEMENT =====
+
     // Initial observation
 
     const regions = await regionizer.detectRegions();
@@ -244,124 +303,159 @@ class Orchestrator {
 
     // Capture initial screenshot
     const screenshotBuffer = await screenshotManager.capture();
-    const screenshotPath = this.traceManager.saveScreenshot(sessionId, 0, screenshotBuffer);
+    const screenshotPath = this.traceManager.saveScreenshot(sessionId, session.stepCount, screenshotBuffer);
 
     // Send initial screenshot
     this.sendMessage(wsClient, {
       type: 'screenshot',
       data: {
         sessionId,
-        step: 0,
+        step: session.stepCount,
         screenshotPath,
         observation,
         regions,
       },
     });
+    const buildObjectivePrompt = (objective: string) => {
+    const completed = session.completedSteps;
+    const planPreview = session.plan.slice(0, 8);
+
+    return [
+      `ORIGINAL TASK:\n${session.task}`,
+      `\nPLAN:`,
+      ...planPreview.map((p, i) => `${i === session.planIndex ? '->' : '  '} [${i}] ${p}`),
+      completed.length ? `\nCOMPLETED:\n- ${completed.join('\n- ')}` : `\nCOMPLETED:\n(none)`,
+      `\nCURRENT OBJECTIVE:\n${objective}`,
+      `\nINSTRUCTIONS:\n- Focus ONLY on the CURRENT OBJECTIVE.\n- Do NOT redo completed objectives.\n- If the objective is already satisfied on the current page, return DONE.`,
+    ].join('\n');
+  };
 
     // Run agent loop
-    const result = await agent.runLoop(
-      task,
-      async (phase, message, action) => {
-        session.stepCount++;
-        const stepNumber = session.stepCount;
+        // Run objectives sequentially until pause or completion
+    while (session.planIndex < session.plan.length) {
+      const objective = session.plan[session.planIndex];
+      const objectivePrompt = buildObjectivePrompt(objective);
 
-        // Log step
-        this.db.insertStep(
-          sessionId,
-          stepNumber,
-          phase,
-          action?.type,
-          action,
-          message
-        );
+      const result = await agent.runLoop(
+        objectivePrompt,
+        async (phase, message, action) => {
+          session.stepCount++;
+          const stepNumber = session.stepCount;
 
-        // Send log
+          this.db.insertStep(
+            sessionId,
+            stepNumber,
+            phase,
+            action?.type,
+            action,
+            message
+          );
+
+          this.sendMessage(wsClient, {
+            type: 'log',
+            data: {
+              step: stepNumber,
+              phase: phase as any,
+              message,
+              timestamp: new Date().toISOString(),
+            },
+          });
+
+          if (phase === 'ACT' && action) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            const screenshotBuffer = await screenshotManager.capture();
+            const screenshotPath = this.traceManager.saveScreenshot(sessionId, stepNumber, screenshotBuffer);
+
+            const newRegions = await regionizer.detectRegions();
+            const newObservation = regionizer.getObservationSummary(newRegions);
+
+            this.sendMessage(wsClient, {
+              type: 'screenshot',
+              data: {
+                sessionId,
+                step: stepNumber,
+                screenshotPath,
+                observation: newObservation,
+                regions: newRegions,
+              },
+            });
+          }
+        },
+        { resetStepCount: !session.resume }
+      );
+
+      session.resume = false;
+
+      // If objective completed, advance plan
+      if (result.completed) {
+        session.completedSteps.push(objective);
+        session.planIndex++;
+
         this.sendMessage(wsClient, {
-          type: 'log',
+          type: 'status',
           data: {
-            step: stepNumber,
-            phase: phase as any,
-            message,
-            timestamp: new Date().toISOString(),
+            sessionId,
+            status: 'running',
+            message: `Objective completed: ${objective}`,
           },
         });
 
-        // Capture screenshot after action
-        if (phase === 'ACT' && action) {
-          await new Promise(resolve => setTimeout(resolve, 500)); // Wait for page to update
-          const screenshotBuffer = await screenshotManager.capture();
-          const screenshotPath = this.traceManager.saveScreenshot(sessionId, stepNumber, screenshotBuffer);
-          
-          // Re-detect regions
-          const newRegions = await regionizer.detectRegions();
-          const newObservation = regionizer.getObservationSummary(newRegions);
+        // Move on to next objective in the same session run
+        continue;
+      }
 
-          this.sendMessage(wsClient, {
-            type: 'screenshot',
-            data: {
-              sessionId,
-              step: stepNumber,
-              screenshotPath,
-              observation: newObservation,
-              regions: newRegions,
-            },
-          });
-        }
-        // completed or failed (no pending action)
-      },
-      {resetStepCount:!session.resume}
-    );
-    session.resume=false;
+      // Paused: store pending action and stop loop
+      const isPaused = Boolean(result.pauseKind) || Boolean(result.pendingAction);
+      if (isPaused) {
+        session.paused = true;
+        session.resume = true;
+        session.pendingAction = result.pendingAction;
+        this.db.updateSessionStatus(sessionId, 'paused');
 
-    // completed=>end session
-    if(result.completed){
-      this.db.updateSessionStatus(sessionId, 'completed');
-      this.sendMessage(wsClient, {
-        type:'status',
-        data:{
-          sessionId,
-          status:'completed',
-          message: result.reason,
-        }
-      });
-      await browser.close();
-      this.activeSessions.delete(sessionId);
-      return;
+        this.sendMessage(wsClient, {
+          type: 'status',
+          data: {
+            sessionId,
+            status: 'paused',
+            message: result.reason,
+            pendingAction: result.pendingAction,
+            pauseKind: result.pauseKind,
+          },
+        });
+        return;
+      }
 
-    }
-    const isPaused=Boolean(result.pauseKind)||Boolean(result.pendingAction);
-    if (isPaused){
-      session.paused = true;
-      session.resume= true;
-      session.pendingAction = result.pendingAction;
-      this.db.updateSessionStatus(sessionId, 'paused');
+      // Error case: stop session
+      this.db.updateSessionStatus(sessionId, 'error');
       this.sendMessage(wsClient, {
         type: 'status',
         data: {
           sessionId,
-          status: 'paused',
+          status: 'error',
           message: result.reason,
-          pendingAction: result.pendingAction,
-          pauseKind: result.pauseKind
         },
       });
+
+      await browser.close();
+      this.activeSessions.delete(sessionId);
       return;
     }
-    this.db.updateSessionStatus(sessionId, 'error');
 
+    // If we exit loop, all objectives completed
+    this.db.updateSessionStatus(sessionId, 'completed');
     this.sendMessage(wsClient, {
       type: 'status',
       data: {
         sessionId,
-        status: 'error',
-        message: result.reason,
+        status: 'completed',
+        message: 'All objectives completed',
       },
     });
 
-    // Cleanup
     await browser.close();
     this.activeSessions.delete(sessionId);
     return;
+
   }
 
   private sendMessage(wsClient: WebSocket | undefined, message: WebSocketMessage): void {

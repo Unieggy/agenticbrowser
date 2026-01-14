@@ -19,14 +19,14 @@ export const ActionSchema = z.discriminatedUnion('type', [
     role: z.enum(['button', 'link', 'textbox', 'checkbox', 'radio']).optional(),
 
   }),
-  z.object({
-    type: z.literal('DOM_FILL'),
-    selector: zOptString,
-    name: zOptString,
-    description: zOptString,
-    value: z.string(),
-    role: z.enum(['textbox']).optional(),
-  }),
+ z.object({
+  type: z.literal('DOM_FILL'),
+  selector: zOptString,
+  name: zOptString,
+  description: zOptString,
+  value: z.string(),
+  role: z.enum(['textbox']).optional(),
+}),
   z.object({
     type: z.literal('WAIT'),
     duration: z.number().optional(),
@@ -68,7 +68,10 @@ export const DecisionSchema=z.object({
   reasoning: z.string(),
   confidence: z.number().min(0).max(1),
 });
-
+export const PlanSchema=z.object({
+  plan:z.array(z.string().min(1).min(1).max(10)),
+});
+export type PlanResult=z.infer<typeof PlanSchema>;
 
 
 export type Decision = z.infer<typeof DecisionSchema>;

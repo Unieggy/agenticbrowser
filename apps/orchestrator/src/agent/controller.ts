@@ -12,6 +12,7 @@ import { Regionizer } from '../vision/regionizer.js';
 import {config} from '../config.js';
 import { text } from 'stream/consumers';
 import { tr } from 'zod/v4/locales';
+import { url } from 'inspector';
 export class AgentController {
   private stepCount = 0;
   private maxSteps = 50; // Safety limit
@@ -36,7 +37,23 @@ export class AgentController {
     if (reset) {
       this.stepCount = 0;
     }
+        // Step-local feedback (NOT persisted memory).
+    // This helps the model adapt strategy when an action doesn't change the page.
+    let lastAction: Action | undefined;
+    let lastOutcome:
+      | {
+          stateChanged: boolean;
+          urlBefore: string;
+          urlAfter: string;
+          titleBefore: string;
+          titleAfter: string;
+          textBefore: string;
+          textAfter: string;
+        }
+      | undefined;
+    let postFillSubmitTries = 0;
 
+      
     while (this.stepCount < this.maxSteps) {
       this.stepCount++;
       
@@ -45,10 +62,132 @@ export class AgentController {
       const regions = await this.regionizer.detectRegions();
       const observation = await this.observe(regions);
       await onStep('OBSERVE', observation);
+      // ====== AUTO-RECOVERY: submit after fill if no state change ======
+      const lastWasFill =
+        lastAction?.type === 'VISION_FILL' || lastAction?.type === 'DOM_FILL';
+
+      if (lastWasFill && lastOutcome && lastOutcome.stateChanged === false) {
+        let injectedAction: Action;
+
+        // 1st try: press Enter
+        if (postFillSubmitTries === 0) {
+          injectedAction = {
+            type: 'KEY_PRESS',
+            key: 'Enter',
+            description: 'Auto-submit after fill (Enter)',
+          };
+        }
+        // 2nd try: click a likely Search/Submit button, else Enter again
+        else if (postFillSubmitTries === 1) {
+          const keywords = ['search', 'submit', 'go', 'find'];
+
+          const candidate = regions.find(r => {
+            const label = (r.label || '').toLowerCase();
+            const clickable =
+              r.id.startsWith('button-') ||
+              r.id.startsWith('link-') ||
+              r.id.startsWith('role-');
+            return clickable && keywords.some(k => label.includes(k));
+          });
+
+          injectedAction = candidate
+            ? {
+                type: 'VISION_CLICK',
+                regionId: candidate.id,
+                description: `Auto-submit after fill (click "${candidate.label}")`,
+              }
+            : {
+                type: 'KEY_PRESS',
+                key: 'Enter',
+                description: 'Auto-submit after fill (Enter fallback)',
+              };
+        }
+        // 3rd+ try: ask user
+        else {
+          await onStep(
+            'DECIDE',
+            'Submission did not trigger after filling. Asking user to submit manually.'
+          );
+          return {
+            completed: false,
+            reason:
+              'I filled the field but submission didn’t trigger. Please press Enter or click Search/Submit in the browser, then click Continue.',
+            pauseKind: 'ASK_USER',
+          };
+        }
+
+        await onStep(
+          'DECIDE',
+          `No state change after fill. Auto-recovery attempt ${postFillSubmitTries + 1}: ${injectedAction.type}`,
+          injectedAction
+        );
+
+        const urlBefore = this.domTools.getUrl();
+        const titleBefore = await this.domTools.getTitle();
+        const textBefore = await this.domTools.getPageTextSnippet(400);
+
+        try {
+          await this.act(injectedAction);
+          await onStep('ACT', `Executed auto-recovery: ${injectedAction.type}`, injectedAction);
+        } catch (error) {
+          await onStep(
+            'ACT',
+            `Auto-recovery failed: ${error instanceof Error ? error.message : String(error)}`
+          );
+
+          postFillSubmitTries++;
+
+          lastAction = injectedAction;
+          lastOutcome = {
+            stateChanged: false,
+            urlBefore,
+            urlAfter: urlBefore,
+            titleBefore,
+            titleAfter: titleBefore,
+            textBefore,
+            textAfter: textBefore,
+          };
+          continue;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        const urlAfter = this.domTools.getUrl();
+        const titleAfter = await this.domTools.getTitle();
+        const textAfter = await this.domTools.getPageTextSnippet(400);
+
+        const stateChanged =
+          urlBefore !== urlAfter ||
+          titleBefore !== titleAfter ||
+          textBefore !== textAfter;
+
+        lastAction = injectedAction;
+        lastOutcome = {
+          stateChanged,
+          urlBefore,
+          urlAfter,
+          titleBefore,
+          titleAfter,
+          textBefore,
+          textAfter,
+        };
+
+        if (stateChanged) postFillSubmitTries = 0;
+        else postFillSubmitTries++;
+
+        // Skip normal DECIDE this loop iteration
+        continue;
+      }
+      // ====== END AUTO-RECOVERY ======
+
 
       // DECIDE
       await onStep('DECIDE', `Step ${this.stepCount}: Deciding next action`);
-      const decision = await this.decide(task, regions, this.stepCount);
+      const decision = await this.decide(task, regions, this.stepCount, {
+        lastAction,
+        lastOutcome,
+      });
+
       const parsed= DecisionSchema.safeParse(decision);
       if(!parsed.success){
         await onStep('DECIDE', `Decision schema validation failed: ${parsed.error.message}`);
@@ -91,12 +230,25 @@ export class AgentController {
 
       // ACT
       await onStep('ACT', `Step ${this.stepCount}: Executing action`);
+      const urlBefore = this.domTools.getUrl();
+      const titleBefore = await this.domTools.getTitle();
+      const textBefore = await this.domTools.getPageTextSnippet(400);
       try {
         await this.act(validatedDecision.action);
         await onStep('ACT', `Executed: ${validatedDecision.action.type}`);
       } catch (error) {
         await onStep('ACT', `Action failed: ${error instanceof Error ? error.message : String(error)}`);
         // Continue to next step
+        lastAction = validatedDecision.action;
+        lastOutcome = {
+          stateChanged: false,
+          urlBefore,
+          urlAfter:urlBefore,
+          titleBefore,
+          titleAfter:titleBefore,
+          textBefore,
+          textAfter:textBefore,
+        };
         continue;
       }
 
@@ -107,6 +259,26 @@ export class AgentController {
 
       // Wait a bit for page to settle
       await new Promise(resolve => setTimeout(resolve, 1000));
+      const urlAfter = this.domTools.getUrl();
+      const titleAfter = await this.domTools.getTitle();
+      const textAfter = await this.domTools.getPageTextSnippet(400);
+
+      const stateChanged =
+        urlBefore !== urlAfter ||
+        titleBefore !== titleAfter ||
+        textBefore !== textAfter;
+
+      // Store feedback for next DECIDE
+      lastAction = validatedDecision.action;
+      lastOutcome = {
+        stateChanged,
+        urlBefore,
+        urlAfter,
+        titleBefore,
+        titleAfter,
+        textBefore,
+        textAfter,
+      };
     }
 
     return { completed: false, reason: 'Max steps reached'};
@@ -123,8 +295,19 @@ export class AgentController {
   /**
    * Decide next action based on task and current state
    */
-  private async decide(task: string, regions: Region[], step: number): Promise<Decision> {
-    const llmDecision=await this.tryGeminiDecision(task, regions, step);
+  private async decide(task: string, regions: Region[], step: number,feedback?:{
+    lastAction?: Action;
+    lastOutcome?:{
+      stateChanged: boolean;
+      urlBefore: string;
+      urlAfter: string;
+      titleBefore: string;
+      titleAfter: string;
+      textBefore: string;
+      textAfter: string;
+    };
+  }): Promise<Decision> {
+    const llmDecision=await this.tryGeminiDecision(task, regions, step,feedback);
     if(llmDecision){
       console.log('Gemini decision:', llmDecision.action.type, llmDecision.action);
       return llmDecision;
@@ -199,7 +382,18 @@ export class AgentController {
     }
     return null;
   }
-  private async tryGeminiDecision(task: string, regions: Region[], step: number): Promise<Decision | null> {
+  private async tryGeminiDecision(task: string, regions: Region[], step: number,feedback?:{
+    lastAction?: Action;
+    lastOutcome?:{
+      stateChanged: boolean;
+      urlBefore: string;
+      urlAfter: string;
+      titleBefore: string;
+      titleAfter: string;
+      textBefore: string;
+      textAfter: string;
+    };
+  }): Promise<Decision | null> {
     const apiKey=config.llm?.geminiApiKey;
     if (!apiKey){ 
       console.error('Gemini API key not configured');
@@ -222,6 +416,24 @@ ${url}
 
 PAGE TEXT (truncated):
 ${pageTextSnippet}
+
+LAST STEP FEEDBACK (if any):
+${JSON.stringify(
+  feedback?.lastOutcome
+    ? {
+        lastAction: feedback.lastAction,
+        lastOutcome: {
+          stateChanged: feedback.lastOutcome.stateChanged,
+          urlBefore: feedback.lastOutcome.urlBefore,
+          urlAfter: feedback.lastOutcome.urlAfter,
+          titleBefore: feedback.lastOutcome.titleBefore,
+          titleAfter: feedback.lastOutcome.titleAfter,
+        },
+      }
+    : { lastAction: feedback?.lastAction, lastOutcome: undefined },
+  null,
+  2
+)}
 
 INTERACTIVE REGIONS (choose by id):
 ${JSON.stringify(regionchoices, null, 2)}
@@ -249,6 +461,10 @@ IMPORTANT:
 - The initial page starts as unsigned-in. So if the task involves personal data, accounts, or payments..etc you must first sign in.
 - If this page requires credentials, login, payment, or MFA, return ASK_USER with a clear message telling the human what to do, and do NOT attempt to fill passwords.
 - If you are unsure, return ASK_USER instead of guessing.
+- Never repeat the exact same action if lastOutcome.stateChanged is false.
+- For example, If you filled an input and stateChanged is false, try a different strategy (e.g. KEY_PRESS "Enter" or click a search/submit button) instead of filling again.
+- Never use null. If a field is not needed, omit it entirely.
+
 `.trim();
     try {
       const model='gemini-2.5-flash'; // Example model name

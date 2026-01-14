@@ -218,6 +218,15 @@ export class DOMTools {
   getUrl(): string {
     return this.page.url();
   }
+  async getTitle():Promise<string>{
+    return await this.page.title();
+  }
+  async getPageTextSnippet(maxChars:number=450): Promise<string> {
+    const text=(await this.getPageText() || '');
+    const normalized=text.toLowerCase().replace(/\s+/g,' ').trim();
+    return normalized.slice(0,maxChars);
+
+  }
 
   async clickSelector(selector: string): Promise<void> {
     await this.page.click(selector);
