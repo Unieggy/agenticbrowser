@@ -185,7 +185,7 @@ class Orchestrator {
     const regionizer = new Regionizer(domTools);
     const guardrails = new Guardrails();
     const verifier = new Verifier(domTools);
-    const agent = new AgentController(domTools, regionizer, guardrails, verifier);
+    const agent = new AgentController(domTools, regionizer, guardrails, verifier,this.db);
     const plan = await planTaskWithGemini(task);
     // Log the generated plan to the UI
     this.sendMessage(wsClient, {
@@ -337,6 +337,7 @@ class Orchestrator {
       const objectivePrompt = buildObjectivePrompt(objective);
 
       const result = await agent.runLoop(
+        sessionId,
         objectivePrompt,
         async (phase, message, action) => {
           session.stepCount++;

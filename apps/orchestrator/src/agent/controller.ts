@@ -12,6 +12,7 @@ import { Regionizer } from '../vision/regionizer.js';
 import {config} from '../config.js';
 import { text } from 'stream/consumers';
 import { tr } from 'zod/v4/locales';
+import { DatabaseManager }  from '../storage/db.js';
 import { url } from 'inspector';
 export class AgentController {
   private stepCount = 0;
@@ -32,7 +33,8 @@ export class AgentController {
     private domTools: DOMTools,
     private regionizer: Regionizer,
     private guardrails: Guardrails,
-    private verifier: Verifier
+    private verifier: Verifier,
+    private db:DatabaseManager
 
   ) {}
 
@@ -40,6 +42,7 @@ export class AgentController {
    * Main agent loop: OBSERVE → DECIDE → ACT → VERIFY
    */
   async runLoop(
+    sessionId:string,
     task: string,
     onStep: (phase: 'OBSERVE' | 'DECIDE' | 'ACT' | 'VERIFY', message: string, action?: Action) => Promise<void>,
     opts?:{resetStepCount?:boolean}
@@ -183,7 +186,7 @@ export class AgentController {
 
       // DECIDE
       await onStep('DECIDE', `Step ${this.stepCount}: Deciding next action`);
-      const decision = await this.decide(task, regions, this.stepCount, {
+      const decision = await this.decide(sessionId,task, regions, this.stepCount, {
         lastAction: this.lastAction,
         lastOutcome: this.lastOutcome,
       });
@@ -295,7 +298,7 @@ export class AgentController {
   /**
    * Decide next action based on task and current state
    */
-  private async decide(task: string, regions: Region[], step: number,feedback?:{
+  private async decide(sessionId:string,task: string, regions: Region[], step: number,feedback?:{
     lastAction?: Action;
     lastOutcome?:{
       stateChanged: boolean;
@@ -307,7 +310,7 @@ export class AgentController {
       textAfter: string;
     };
   }): Promise<Decision> {
-    const llmDecision=await this.tryGeminiDecision(task, regions, step,feedback);
+    const llmDecision=await this.tryGeminiDecision(sessionId,task, regions, step,feedback);
     if(llmDecision){
       console.log('Gemini decision:', llmDecision.action.type, llmDecision.action);
       return llmDecision;
@@ -382,7 +385,7 @@ export class AgentController {
     }
     return null;
   }
-  private async tryGeminiDecision(task: string, regions: Region[], step: number,feedback?:{
+  private async tryGeminiDecision(sessionId:string,task: string, regions: Region[], step: number,feedback?:{
     lastAction?: Action;
     lastOutcome?:{
       stateChanged: boolean;
@@ -398,6 +401,12 @@ export class AgentController {
     if (!apiKey){ 
       console.error('Gemini API key not configured');
       return null;}
+    const recentHistory=this.db.getRecentHistory(sessionId,5)
+    const historyText = recentHistory.length > 0 
+      ? recentHistory.map(h => 
+          `- Step ${h.step_number}: Tried ${h.action_type} on ${h.action_data?.regionId || 'unknown'}. Result: ${h.error ? 'Failed' : 'Executed'}`
+        ).join('\n')
+      : "(No history yet)";
     const regionchoices=regions.slice(0,40).map(r=>({id:r.id, label:r.label}));
     const url=this.domTools.getUrl();
     const pageText=await this.domTools.getPageText();
@@ -413,6 +422,9 @@ ${step}
 
 CURRENT URL:
 ${url}
+
+SHORT-TERM MEMORY (Last 5 Actions):
+${historyText}
 
 PAGE TEXT (truncated):
 ${pageTextSnippet}
@@ -469,6 +481,7 @@ IMPORTANT:
 - For example, If you filled an input and stateChanged is false, try a different strategy (e.g. KEY_PRESS "Enter" or click a search/submit button) instead of filling again.
 - Never use null. If a field is not needed, omit it entirely.
 - If no button exists, use KEY_PRESS "Enter" with the 'regionId' of the input field you just filled.
+- Review "SHORT-TERM MEMORY". If you see you just performed an action (like clicking a tab) and the URL hasn't changed, DO NOT repeat it. Try a different strategy (e.g. DOM_CLICK instead of VISION, or KEY_PRESS).
 `.trim();
     try {
       const model='gemini-2.5-flash'; // Example model name

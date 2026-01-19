@@ -173,6 +173,27 @@ export class DatabaseManager {
     `);
     return stmt.all(sessionId) as StepRow[];
   }
+  getRecentHistory(sessionId:string,limit:number=5):any[]{
+    const stmt = this.db.prepare(`
+      SELECT step_number, phase, action_type, action_data, observation, error
+      FROM steps 
+      WHERE session_id = ? AND phase = 'ACT'
+      ORDER BY step_number DESC 
+      LIMIT ?
+    `);
+    
+    return stmt.all(sessionId, limit).map((row: any) => {
+      // Parse the JSON string back into an object
+      try {
+        if (row.action_data) {
+          row.action_data = JSON.parse(row.action_data);
+        }
+      } catch (e) {
+        // ignore parse error
+      }
+      return row;
+    }).reverse();
+  }
 
   close(): void {
     this.db.close();
