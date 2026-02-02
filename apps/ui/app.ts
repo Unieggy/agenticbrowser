@@ -56,11 +56,10 @@ function init() {
   confirmBtn.addEventListener('click', handleConfirm);
   cancelBtn.addEventListener('click', handleCancel);
   
-  // Log toggle
+  // Log toggle — slides neural log panel
   logToggle.addEventListener('click', () => {
     logVisible = !logVisible;
     logContainer.classList.toggle('hidden-log', !logVisible);
-    logToggle.classList.toggle('rotated', !logVisible);
   });
 }
 
