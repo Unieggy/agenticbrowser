@@ -478,16 +478,16 @@ body {
 
 /* Execute (primary) */
 .cmd-execute {
-  background: linear-gradient(135deg, var(--neon), var(--cyan));
+  background: #c0c0c0;
   color: var(--void);
-  box-shadow: 0 4px 20px rgba(var(--neon-rgb), 0.3);
+  box-shadow: 0 4px 20px rgba(192, 192, 192, 0.3);
 }
 
 .cmd-execute:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow:
-    0 6px 28px rgba(var(--neon-rgb), 0.45),
-    0 0 40px rgba(var(--cyan-rgb), 0.15);
+    0 6px 28px rgba(192, 192, 192, 0.45),
+    0 0 40px rgba(192, 192, 192, 0.15);
 }
 
 .cmd-execute:active:not(:disabled) {
