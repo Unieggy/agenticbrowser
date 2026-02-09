@@ -387,6 +387,7 @@ function heuristicPlan(task: string): PlanResult {
 
   return {
     strategy: "System Offline: Falling back to simple heuristic parsing. Executing steps sequentially.",
+    needsSynthesis: false,
     steps: rawSteps.slice(0, 10).map((stepText, index) => ({
       id: index + 1,
       title: stepText,
@@ -487,6 +488,7 @@ Before planning, determine the task type:
 ### RESPONSE FORMAT (Strict JSON):
 {
   "strategy": "Your high-level analysis. State the task type (A/B/C) and your reasoning...",
+  "needsSynthesis": true,
   "steps": [
     {
       "id": 1,
@@ -497,6 +499,10 @@ Before planning, determine the task type:
     }
   ]
 }
+
+**needsSynthesis rules:**
+- Set to TRUE if the user expects information back: research tasks, questions ("tell me", "find out", "how many", "what is", "who is"), comparisons, recommendations, or any task where the user wants an answer — not just a page opened.
+- Set to FALSE for pure navigation/action tasks: "go to youtube", "click the first link", "log into my account".
 `.trim();
 
 

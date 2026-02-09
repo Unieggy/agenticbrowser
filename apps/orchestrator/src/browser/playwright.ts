@@ -29,7 +29,7 @@ export class BrowserController {
     if (!this.page) {
       throw new Error('Browser not launched');
     }
-    await this.page.goto(url, { waitUntil: 'networkidle' });
+    await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
   }
 
   async close(): Promise<void> {

@@ -20,7 +20,7 @@ export class DOMTools {
   /**
    * Scans the page, saves elements to memory, and returns the list to the AI.
    */
-  async scanPage(isRetry = false): Promise<Region[]> {
+  async scanPage(isRetry = false, quick = false): Promise<Region[]> {
     // 1. Clear old memory and remove stale agent-id tags from the DOM.
     this.elementStore.clear();
     await this.page.evaluate('document.querySelectorAll("[data-agent-id]").forEach(el => el.removeAttribute("data-agent-id"))')
@@ -185,7 +185,8 @@ export class DOMTools {
     }
 
     // 7. SPA retry: if 0 regions on a real page, wait for network idle + extra time, then retry once
-    if (regions.length === 0 && !isRetry) {
+    //    Skip in quick mode (screenshot-only scans) to avoid blocking the UI.
+    if (regions.length === 0 && !isRetry && !quick) {
       const url = this.page.url();
       const isRealPage = url && !url.startsWith('about:') && url !== 'chrome://newtab/';
       if (isRealPage) {

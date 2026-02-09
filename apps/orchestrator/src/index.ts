@@ -40,6 +40,7 @@ class Orchestrator {
     completedSteps: string[];
     pausedForHumanObjective?: string;
     strategy:string;
+    needsSynthesis: boolean;
     researchNotes: string[];
 
   }> = new Map();
@@ -261,6 +262,7 @@ class Orchestrator {
       wsClient,
       plan:planResult.steps,
       strategy: planResult.strategy,
+      needsSynthesis: planResult.needsSynthesis,
       planIndex:0,
       completedSteps:[],
       pausedForHumanObjective: undefined,
@@ -458,7 +460,8 @@ class Orchestrator {
             const screenshotBuffer = await session.screenshotManager.capture();
             const screenshotPath = this.traceManager.saveScreenshot(sessionId, stepNumber, screenshotBuffer);
 
-            const newRegions = await regionizer.detectRegions();
+            // quick=true: skip SPA retry for screenshot-only scans (avoids 8s+ delay)
+            const newRegions = await regionizer.detectRegions(true);
             const newObservation = regionizer.getObservationSummary(newRegions);
 
             this.sendMessage(wsClient, {
@@ -562,11 +565,10 @@ class Orchestrator {
       return;
     }
 
-    // Synthesize research findings — only for research-type tasks with meaningful notes
-    const isResearchTask = /research|find|compare|recommend|summarize|review|best|top|look up|what is|who is/i.test(session.task);
+    // Synthesize research findings — only when the planner flagged needsSynthesis
     const meaningfulNotes = session.researchNotes.filter(n => n.length > 100);
 
-    if (isResearchTask && meaningfulNotes.length > 0) {
+    if (session.needsSynthesis && meaningfulNotes.length > 0) {
       this.sendMessage(wsClient, {
         type: 'log',
         data: {
@@ -597,7 +599,7 @@ class Orchestrator {
       data: {
         sessionId,
         status: 'completed',
-        message: (isResearchTask && meaningfulNotes.length > 0)
+        message: (session.needsSynthesis && meaningfulNotes.length > 0)
           ? 'All objectives completed. Research synthesis sent above. Browser is still open — click Stop when done.'
           : 'All objectives completed. Browser is still open — click Stop when done.',
       },

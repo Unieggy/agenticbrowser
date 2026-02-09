@@ -86,7 +86,10 @@ export const PlanSchema = z.object({
   // 1. The Strategy: The AI's high-level analysis (Mental Simulation)
   strategy: z.string().describe("High-level reasoning and mental simulation of the workflow (e.g. 'This site requires SSO login...')."),
 
-  // 2. The Steps: Rich objects instead of just strings
+  // 2. Whether the task requires a final synthesis/answer for the user
+  needsSynthesis: z.boolean().default(false).describe("True if the user expects information back (research, questions, 'tell me', 'find out', 'how many'). False for pure navigation/action tasks."),
+
+  // 3. The Steps: Rich objects instead of just strings
   steps: z.array(z.object({
     id: z.number(),
     title: z.string().describe("Short objective (e.g. 'Search for chatgpt')"),

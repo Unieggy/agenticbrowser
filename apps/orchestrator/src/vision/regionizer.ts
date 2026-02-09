@@ -18,9 +18,10 @@ export class Regionizer {
    * If LLM API key is available, could call vision model here.
    * For now, uses DOM-based heuristics as fallback.
    */
-  async detectRegions(): Promise<Region[]> {
+  async detectRegions(quick = false): Promise<Region[]> {
   // Directly use our new robust scanner
-  return await this.domTools.scanPage(); 
+  // quick=true skips the SPA retry (used for screenshot-only scans)
+  return await this.domTools.scanPage(false, quick);
 }
 
   /**

@@ -70,12 +70,29 @@ export class AgentController {
       
     while (this.stepCount < this.maxSteps) {
       this.stepCount++;
-      
-      // OBSERVE
-      await onStep('OBSERVE', `Step ${this.stepCount}: Observing page state`);
-      const regions = await this.regionizer.detectRegions();
-      const observation = await this.observe(regions);
-      await onStep('OBSERVE', observation);
+
+      // ====== FAST AUTO-RECOVERY: skip expensive re-scan after fill ======
+      // After a fill with no state change, the first recovery is always Enter.
+      // Enter doesn't need regions, so skip the full scan to save 30-90s on heavy pages.
+      // 2nd recovery (find Submit button) still needs regions → do full scan then.
+      const lastWasFill =
+        this.lastAction?.type === 'VISION_FILL' || this.lastAction?.type === 'DOM_FILL';
+      const needsFillRecovery = lastWasFill && this.lastOutcome && this.lastOutcome.stateChanged === false;
+      const canSkipScan = needsFillRecovery && this.postFillSubmitTries === 0;
+
+      let regions: Region[];
+
+      if (canSkipScan) {
+        // First recovery attempt: just pressing Enter — no scan needed
+        await onStep('OBSERVE', `Step ${this.stepCount}: Fill detected, pressing Enter`);
+        regions = [];
+      } else {
+        // Full OBSERVE for everything else
+        await onStep('OBSERVE', `Step ${this.stepCount}: Observing page state`);
+        regions = await this.regionizer.detectRegions();
+        const observation = await this.observe(regions);
+        await onStep('OBSERVE', observation);
+      }
 
       // ====== URL CHANGE DETECTION: reset scroll state on navigation ======
       const currentUrl = this.domTools.getUrl();
@@ -93,10 +110,7 @@ export class AgentController {
       }
 
       // ====== AUTO-RECOVERY: submit after fill if no state change ======
-      const lastWasFill =
-        this.lastAction?.type === 'VISION_FILL' || this.lastAction?.type === 'DOM_FILL';
-
-      if (lastWasFill && this.lastOutcome && this.lastOutcome.stateChanged === false) {
+      if (needsFillRecovery) {
         let injectedAction: Action;
 
         // 1st try: press Enter
@@ -635,7 +649,14 @@ Respond with ONLY the word "YES" or "NO".`.trim();
           `- Step ${h.step_number}: Tried ${h.action_type} on ${h.action_data?.regionId || 'unknown'}. Result: ${h.error ? 'Failed' : 'Executed'}`
         ).join('\n')
       : "(No history yet)";
-    const regionchoices=regions.slice(0,40).map(r=>({id:r.id, role:r.role, label:r.label, ...(r.href ? {href:r.href} : {})}));
+    // Smart region selection: prioritize content links (with href) over navigation chrome.
+    // On YouTube search results, the first 40 DOM elements are all header/nav — video links get cut off.
+    const contentRegions = regions.filter(r => r.href && r.role === 'link');
+    const inputRegions = regions.filter(r => r.role === 'input' || r.role === 'textarea');
+    const otherRegions = regions.filter(r => !(r.href && r.role === 'link') && r.role !== 'input' && r.role !== 'textarea');
+    // Compose: all inputs first (fill targets), then content links (click targets), then the rest
+    const prioritized = [...inputRegions, ...contentRegions, ...otherRegions];
+    const regionchoices = prioritized.slice(0, 60).map(r => ({id: r.id, role: r.role, label: r.label, ...(r.href ? {href: r.href} : {})}));
     const url=this.domTools.getUrl();
     const pageText=await this.domTools.getVisibleText();
     const pageTextSnippet=pageText.slice(0,4000); // Increased from 1500 to capture more content on large pages
