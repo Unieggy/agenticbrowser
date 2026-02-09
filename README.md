@@ -16,7 +16,7 @@ User (Web UI) ──WebSocket──> Orchestrator ──Playwright──> Browse
                           │    ↓           │
                           │  AUTO-SCROLL   │ (semantic LLM check)
                           │    ↓           │
-                          │  DECIDE        │ (Gemini 2.5 Flash)
+                          │  DECIDE        │ (Gemini 3 Flash)
                           │    ↓           │
                           │  ACT           │ (cursor physics / DOM)
                           │    ↓           │
@@ -29,13 +29,13 @@ User (Web UI) ──WebSocket──> Orchestrator ──Playwright──> Browse
 - **UI**: Web interface (Vite + TypeScript) with glassmorphism design and animated WebGL background
 - **Orchestrator**: Node.js server controlling Playwright, running the agent loop, and managing state
 - **Agent Loop**: OBSERVE → AUTO-RECOVERY → AUTO-SCROLL → DECIDE → ACT → VERIFY
-- **LLM Integration**: Gemini 2.5 Flash for planning, decisions, and research synthesis; Gemini 2.0 Flash Lite for semantic scroll checks
+- **LLM Integration**: Gemini 3 Flash for planning and decisions; Gemini 2.5 Flash for research synthesis and semantic scroll checks
 
 ## Features
 
 ### Planning & Intelligence
 - **Pre-Planning Scout**: Verifies URLs via Google Search before planning (handles CAPTCHA detection)
-- **LLM-Powered Planning**: Gemini 2.5 Flash decomposes tasks into atomic, executable steps
+- **LLM-Powered Planning**: Gemini 3 Flash decomposes tasks into atomic, executable steps
 - **Task Classification**: Automatically categorizes tasks as Simple Action, Deep Research, or Transactional
 - **Plan Fast-Forward**: After completing a step, automatically skips subsequent steps that are already accomplished (prevents redundant work when the agent moves faster than the plan)
 - **Original Task Context**: The full user task is always passed to the LLM, ensuring multi-language prompts and search terms are preserved through the planning pipeline
@@ -196,7 +196,7 @@ agenticbrowser/
 
 - **Runtime**: Node.js + TypeScript
 - **Browser Automation**: Playwright
-- **LLM**: Gemini 2.5 Flash (planning/decisions/synthesis), Gemini 2.0 Flash Lite (semantic checks)
+- **LLM**: Gemini 3 Flash (planning/decisions), Gemini 2.5 Flash (synthesis/semantic checks)
 - **Database**: SQLite via better-sqlite3
 - **WebSocket**: ws
 - **Validation**: Zod

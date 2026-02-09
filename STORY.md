@@ -6,7 +6,7 @@ It started with a video. I watched OpenAI demo their "Atlas" agent navigating th
 
 Not a wrapper around an API. Not a simple script. A real agent that can reason, plan, and act.
 
-The original plan was to use GPT-4 as the brain. But then I stumbled upon the Gemini Hackathon with its "No Limits" theme. I had been curious about Gemini 2.5 Flash for a while. Could it handle the speed and reasoning demands of real-time browser automation? There was only one way to find out.
+The original plan was to use GPT-4 as the brain. But then I stumbled upon the Gemini Hackathon with its "No Limits" theme. I had been curious about Gemini Flash for a while. Could it handle the speed and reasoning demands of real-time browser automation? There was only one way to find out.
 
 So I pivoted. The brain would be Gemini.
 
@@ -98,7 +98,7 @@ The fix: cap the networkidle wait at 1.5 seconds, and remove the duplicate call.
 
 Building this taught me things I could not have learned from tutorials.
 
-**Latency is the enemy of agency.** When Gemini takes 2 seconds to respond, the agent feels sluggish. When it takes 200ms, the agent feels alive. Gemini 2.5 Flash delivered on speed in a way that made the whole system feel responsive. This matters more than I expected. An agent that thinks too slowly stops feeling like an agent.
+**Latency is the enemy of agency.** When Gemini takes 2 seconds to respond, the agent feels sluggish. When it takes 200ms, the agent feels alive. Gemini 3 Flash delivered on speed in a way that made the whole system feel responsive. This matters more than I expected. An agent that thinks too slowly stops feeling like an agent.
 
 **LLMs are lazy by default.** They will find the shortest path to something that looks like success. If you want thorough behavior, you have to demand it explicitly. You have to close every loophole in the prompt. "Research" means nothing to a model. "Visit at least 3 distinct sources and scroll to read full content" means something.
 
@@ -116,4 +116,4 @@ It is not Atlas, it is mine. And it works.
 
 ---
 
-*Built with Gemini 2.5 Flash, Playwright, TypeScript, and too much coffee.*
+*Built with Gemini 3 Flash, Playwright, TypeScript, and too much coffee.*
