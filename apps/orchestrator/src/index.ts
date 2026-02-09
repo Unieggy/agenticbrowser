@@ -509,7 +509,7 @@ class Orchestrator {
         return;
       }
 
-      // Error case: stop session
+      // Error case: stop session (keep browser open for user inspection)
       this.db.updateSessionStatus(sessionId, 'error');
       this.sendMessage(wsClient, {
         type: 'status',
@@ -519,25 +519,19 @@ class Orchestrator {
           message: result.reason,
         },
       });
-
-      await browser.close();
-      this.activeSessions.delete(sessionId);
       return;
     }
 
-    // If we exit loop, all objectives completed
+    // All objectives completed — keep browser open for user to inspect results
     this.db.updateSessionStatus(sessionId, 'completed');
     this.sendMessage(wsClient, {
       type: 'status',
       data: {
         sessionId,
         status: 'completed',
-        message: 'All objectives completed',
+        message: 'All objectives completed. Browser is still open — click Stop when done.',
       },
     });
-
-    await browser.close();
-    this.activeSessions.delete(sessionId);
     return;
 
   }

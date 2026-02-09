@@ -135,9 +135,14 @@ function handleStatus(status: any): void {
   }
 
   // If task ended, re-enable UI controls
-  if (status.status === 'completed' || status.status === 'stopped' || status.status === 'error') {
+  if (status.status === 'stopped') {
     startBtn.disabled = false;
     stopBtn.disabled = true;
+    taskInput.disabled = false;
+  } else if (status.status === 'completed' || status.status === 'error') {
+    // Keep stop button enabled so user can close browser when done viewing
+    startBtn.disabled = false;
+    stopBtn.disabled = false;
     taskInput.disabled = false;
   }
 }

@@ -12,6 +12,7 @@ export interface Region {
     h: number;
   };
   confidence: number;
+  href?: string;
 }
 
 export interface StepLog {

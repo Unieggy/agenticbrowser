@@ -29,9 +29,11 @@ export class AgentController {
   // Auto-scroll state
   private scrollCount = 0;
   private maxAutoScrolls = 5;
-  private lastScrollPageText = '';
   private contentVisible = false;
   private bottomReached = false;
+  private lastScrollY = 0;
+  private lastScrollHeight = 0;
+  private lastUrl = '';
 
   constructor(
     private domTools: DOMTools,
@@ -57,9 +59,10 @@ export class AgentController {
       this.lastAction = undefined;
       this.lastOutcome = undefined;
       this.scrollCount = 0;
-      this.lastScrollPageText = '';
       this.contentVisible = false;
       this.bottomReached = false;
+      this.lastScrollY = 0;
+      this.lastScrollHeight = 0;
     }
 
       
@@ -71,6 +74,21 @@ export class AgentController {
       const regions = await this.regionizer.detectRegions();
       const observation = await this.observe(regions);
       await onStep('OBSERVE', observation);
+
+      // ====== URL CHANGE DETECTION: reset scroll state on navigation ======
+      const currentUrl = this.domTools.getUrl();
+      if (currentUrl !== this.lastUrl) {
+        if (this.lastUrl) {
+          console.log(`[navigation] New page detected: ${currentUrl}. Resetting scroll state.`);
+        }
+        this.scrollCount = 0;
+        this.contentVisible = false;
+        this.bottomReached = false;
+        this.lastScrollY = 0;
+        this.lastScrollHeight = 0;
+        this.lastUrl = currentUrl;
+      }
+
       // ====== AUTO-RECOVERY: submit after fill if no state change ======
       const lastWasFill =
         this.lastAction?.type === 'VISION_FILL' || this.lastAction?.type === 'DOM_FILL';
@@ -193,32 +211,32 @@ export class AgentController {
 
       // ====== AUTO-SCROLL: semantic content-aware scrolling ======
       if (!this.contentVisible && this.scrollCount < this.maxAutoScrolls && !this.bottomReached) {
-        const autoScrollPageText = await this.domTools.getPageText();
+        const visibleText = await this.domTools.getVisibleText();
         const elementLabels = regions.map(r => r.label).filter(Boolean) as string[];
 
-        // Reset scroll state if URL changed (navigated to new page)
-        if (this.lastOutcome && this.lastOutcome.urlBefore !== this.lastOutcome.urlAfter) {
-          this.scrollCount = 0;
-          this.lastScrollPageText = '';
-          this.contentVisible = false;
-          this.bottomReached = false;
-        }
-
-        const visible = await this.checkSemanticVisibility(task, autoScrollPageText, elementLabels);
+        const visible = await this.checkSemanticVisibility(task, visibleText, elementLabels);
 
         if (visible) {
           this.contentVisible = true;
           console.log('[auto-scroll] Semantic check: target content IS visible. Handing off to LLM.');
           // Fall through to DECIDE
         } else {
-          const currentSnippet = autoScrollPageText.slice(0, 3000);
+          // Geometry-based bottom detection: did the scrollbar move? Did the page grow?
+          const geoBefore = await this.domTools.getScrollGeometry();
 
-          // Bottom detection: if page text didn't change since last scroll, stop
-          if (this.lastScrollPageText && this.lastScrollPageText === currentSnippet) {
+          const scrollYStuck = geoBefore.scrollY === this.lastScrollY;
+          const heightStuck = geoBefore.scrollHeight === this.lastScrollHeight;
+          const atDocumentBottom = geoBefore.scrollY + geoBefore.viewportHeight >= geoBefore.scrollHeight - 5;
+
+          if (this.scrollCount > 0 && scrollYStuck && heightStuck) {
+            // Scroll didn't move AND page didn't grow — truly at bottom
             this.bottomReached = true;
-            console.log('[auto-scroll] Bottom of page reached — no more content below.');
+            console.log(`[auto-scroll] Bottom of page reached (scrollY=${geoBefore.scrollY}, height=${geoBefore.scrollHeight}). No more content.`);
+          } else if (this.scrollCount > 0 && atDocumentBottom && heightStuck) {
+            // At document bottom and no new content loaded
+            this.bottomReached = true;
+            console.log(`[auto-scroll] At document bottom (scrollY=${geoBefore.scrollY}, height=${geoBefore.scrollHeight}). No infinite scroll detected.`);
           } else {
-            this.lastScrollPageText = currentSnippet;
             this.scrollCount++;
             console.log(`[auto-scroll] Semantic check: target NOT visible (${this.scrollCount}/${this.maxAutoScrolls}). Scrolling down...`);
             await onStep('OBSERVE', `Auto-scroll: target content not yet visible (${this.scrollCount}/${this.maxAutoScrolls})`);
@@ -229,6 +247,11 @@ export class AgentController {
 
             await this.domTools.scroll('down', 600);
             await this.domTools.waitForStability();
+
+            // Record geometry AFTER scroll for next iteration's comparison
+            const geoAfter = await this.domTools.getScrollGeometry();
+            this.lastScrollY = geoAfter.scrollY;
+            this.lastScrollHeight = geoAfter.scrollHeight;
 
             const urlAfter = this.domTools.getUrl();
             const titleAfter = await this.domTools.getTitle();
@@ -241,7 +264,7 @@ export class AgentController {
               description: `Auto-scroll ${this.scrollCount}/${this.maxAutoScrolls}`,
             };
             this.lastOutcome = {
-              stateChanged: textBefore !== textAfter,
+              stateChanged: textBefore !== textAfter || geoAfter.scrollY !== geoBefore.scrollY,
               urlBefore,
               urlAfter,
               titleBefore,
@@ -542,10 +565,10 @@ Respond with ONLY the word "YES" or "NO".`.trim();
           `- Step ${h.step_number}: Tried ${h.action_type} on ${h.action_data?.regionId || 'unknown'}. Result: ${h.error ? 'Failed' : 'Executed'}`
         ).join('\n')
       : "(No history yet)";
-    const regionchoices=regions.slice(0,40).map(r=>({id:r.id, label:r.label}));
+    const regionchoices=regions.slice(0,40).map(r=>({id:r.id, label:r.label, ...(r.href ? {href:r.href} : {})}));
     const url=this.domTools.getUrl();
-    const pageText=await this.domTools.getPageText();
-    const pageTextSnippet=pageText.slice(0,1500); // Limit to first 1500 chars
+    const pageText=await this.domTools.getVisibleText();
+    const pageTextSnippet=pageText.slice(0,1500); // Limit to first 1500 chars of visible text
     const prompt=`
 You are controlling a local browser agent.
 
@@ -587,6 +610,20 @@ Auto-scrolled ${this.scrollCount} time(s) on this page. Target content is ${this
 
 INTERACTIVE REGIONS (choose by id):
 ${JSON.stringify(regionchoices, null, 2)}
+
+BEFORE choosing an action, you MUST perform a SITUATION ANALYSIS in your reasoning:
+
+1. **WHERE AM I?** — Look at the CURRENT URL and PAGE TEXT. What kind of page is this? (search results, a profile page, an article, a homepage, a settings page, etc.)
+
+2. **HOW DID I GET HERE?** — Look at SHORT-TERM MEMORY. What actions brought me to this page? If I navigated to a specific profile/page to find content, I should stay here and explore it.
+
+3. **DOES THE STEP MAKE SENSE HERE?** — Read the CURRENT STEP literally vs. what this page actually offers:
+   - If the step says "Search for X" but I'm already on a specific profile/page that likely contains X → **SCROLL to find it** instead of using a global search bar (which would navigate AWAY from this page I spent effort reaching).
+   - If the step says "Find X" and I'm on a content page → SCROLL first, don't search.
+   - If I'm on a search engine or homepage → then using a search bar makes sense.
+   - **KEY QUESTION**: "Would clicking this element LEAVE the page I worked hard to reach?" If yes, think twice.
+
+Your "reasoning" field MUST include this analysis (1-2 sentences). Then choose the action.
 
 You MUST respond with ONLY valid JSON (no backticks, no extra text) matching this TypeScript shape:
 

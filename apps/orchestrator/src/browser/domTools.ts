@@ -31,23 +31,47 @@ export class DOMTools {
     const elements = await this.page.locator(selector).all();
 
     // 3. Loop through and "Tag" them
+    const seenHrefs = new Set<string>(); // Deduplicate links with same href
     for (const element of elements) {
       if (!await element.isVisible()) continue;
 
       let bbox = await element.boundingBox();
       if (!bbox || bbox.width < 5 || bbox.height < 5) continue;
 
-      // 3. Get Standard Label
-      const tagName = await element.evaluate(el => el.tagName.toLowerCase());
-      let text = (await element.textContent()) || '';
-      let label = (await element.getAttribute('aria-label')) || 
-                  (await element.getAttribute('name')) || 
-                  (await element.getAttribute('placeholder')) || 
+      // 3a. Bubble-up: if this is an inert child (img, div, span), find parent <a> or <button>
+      let target = element;
+      let targetTag = await element.evaluate(el => el.tagName.toLowerCase());
+      if (targetTag === 'img' || targetTag === 'div' || targetTag === 'span' || targetTag === 'svg') {
+        const parentAnchor = await element.evaluate(el => {
+          let node = el.parentElement;
+          for (let i = 0; i < 3 && node; i++) {
+            const tag = node.tagName.toLowerCase();
+            if (tag === 'a' || tag === 'button') return true;
+            node = node.parentElement;
+          }
+          return false;
+        });
+        if (parentAnchor) {
+          // Use the parent anchor/button as our target instead
+          const parent = element.locator('xpath=ancestor::a[1] | ancestor::button[1]').first();
+          if (await parent.count() > 0) {
+            target = parent;
+            targetTag = await target.evaluate(el => el.tagName.toLowerCase());
+            bbox = await target.boundingBox() || bbox;
+          }
+        }
+      }
+
+      // 3b. Get Standard Label
+      let text = (await target.textContent()) || '';
+      let label = (await target.getAttribute('aria-label')) ||
+                  (await target.getAttribute('name')) ||
+                  (await target.getAttribute('placeholder')) ||
                   text;
-      
-      // 4. IMAGE DETECTION (The Fix)
+
+      // 4. IMAGE DETECTION: if still no label, check for child <img> alt text
       if (!label || label.trim().length === 0) {
-        const img = element.locator('img').first();
+        const img = target.locator('img').first();
         if (await img.count() > 0) {
           const alt = await img.getAttribute('alt');
           label = alt ? `Image: ${alt}` : "Unlabeled Image";
@@ -56,17 +80,27 @@ export class DOMTools {
 
       // 5. Cleanup
       label = label.replace(/\s+/g, ' ').trim().slice(0, 100);
-      
+
       if (label.length === 0) continue;
 
+      // Extract href for link elements
+      const href = await target.getAttribute('href');
+
+      // Deduplicate: skip if we already registered a region with the same href
+      if (href) {
+        if (seenHrefs.has(href)) continue;
+        seenHrefs.add(href);
+      }
+
       const id = `element-${randomUUID().slice(0, 8)}`;
-      this.elementStore.set(id, element);
+      this.elementStore.set(id, target);
 
       regions.push({
         id: id,
         label: label,
         bbox: { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height },
-        confidence: 1.0
+        confidence: 1.0,
+        ...(href ? { href } : {}),
       });
     }
 
@@ -132,10 +166,30 @@ export class DOMTools {
   }
 
   /**
-   * Get page text content for observation
+   * Get ALL text content (includes hidden/script text).
+   * Use getVisibleText() for LLM-facing content.
    */
   async getPageText(): Promise<string> {
     return await this.page.textContent('body') || '';
+  }
+
+  /**
+   * Get only visually rendered text (strips <script>, JSON blobs, hidden divs).
+   * Uses innerText which respects CSS visibility — essential for SPAs like Instagram.
+   */
+  async getVisibleText(): Promise<string> {
+    // Runs in browser context — document/window are available at runtime
+    return await this.page.evaluate('document.body.innerText || ""') as string;
+  }
+
+  /**
+   * Returns scroll geometry for bottom/stuck detection.
+   * scrollY: how far down we've scrolled
+   * scrollHeight: total document height (grows on infinite scroll)
+   * viewportHeight: visible area height
+   */
+  async getScrollGeometry(): Promise<{ scrollY: number; scrollHeight: number; viewportHeight: number }> {
+    return await this.page.evaluate('({ scrollY: window.scrollY, scrollHeight: document.body.scrollHeight, viewportHeight: window.innerHeight })') as { scrollY: number; scrollHeight: number; viewportHeight: number };
   }
 
   getUrl(): string {
