@@ -360,6 +360,21 @@ body {
 .log-entry.error           { border-left-color: #ef4444; background: rgba(239, 68, 68, 0.05); }
 .log-entry.error .log-message   { color: #fca5a5; }
 
+.log-entry.synthesis {
+  border-left-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+  border-left-width: 3px;
+  padding: 12px 10px;
+  margin: 8px 0;
+  border-radius: 6px;
+}
+.log-entry.synthesis .log-message {
+  color: #fcd34d;
+  white-space: pre-wrap;
+  line-height: 1.5;
+  font-size: 11px;
+}
+
 .log-timestamp {
   color: var(--text-ghost);
   font-size: 9px;

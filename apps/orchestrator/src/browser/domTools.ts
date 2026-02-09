@@ -21,8 +21,10 @@ export class DOMTools {
    * Scans the page, saves elements to memory, and returns the list to the AI.
    */
   async scanPage(isRetry = false): Promise<Region[]> {
-    // 1. Clear old memory. We are looking at a new page state now.
+    // 1. Clear old memory and remove stale agent-id tags from the DOM.
     this.elementStore.clear();
+    await this.page.evaluate('document.querySelectorAll("[data-agent-id]").forEach(el => el.removeAttribute("data-agent-id"))')
+      .catch(() => {}); // ignore if page context is destroyed
     const regions: Region[] = [];
 
     // 2. Find all interactive elements (buttons, links, inputs)
@@ -97,7 +99,16 @@ export class DOMTools {
       const regionRole = this.deriveRole(targetTag, ariaRole);
 
       const id = `element-${randomUUID().slice(0, 8)}`;
-      this.elementStore.set(id, target);
+
+      // Tag the DOM element with a stable identity attribute
+      try {
+        await target.evaluate((el, agentId) => el.setAttribute('data-agent-id', agentId), id);
+      } catch {
+        continue; // Element detached during scan, skip it
+      }
+      // Use the identity attribute as the locator — stable regardless of DOM order changes
+      const stableLocator = this.page.locator(`[data-agent-id="${id}"]`);
+      this.elementStore.set(id, stableLocator);
 
       regions.push({
         id: id,
@@ -117,6 +128,7 @@ export class DOMTools {
           const results = [];
           const seen = new Set();
           const all = document.querySelectorAll('*');
+          let counter = 0;
           for (const el of all) {
             if (seen.has(el)) continue;
             const style = window.getComputedStyle(el);
@@ -137,12 +149,14 @@ export class DOMTools {
             const ariaLabel = el.getAttribute('aria-label') || '';
             const text = (el.innerText || '').slice(0, 100).trim();
             const href = el.getAttribute('href') || (el.closest('a') ? el.closest('a').href : '') || '';
-            results.push({ tag, text, ariaLabel, href, rect: { x: rect.x, y: rect.y, w: rect.width, h: rect.height } });
+            const agentId = 'ptr-' + (counter++);
+            el.setAttribute('data-agent-id', agentId);
+            results.push({ tag, text, ariaLabel, href, agentId, rect: { x: rect.x, y: rect.y, w: rect.width, h: rect.height } });
             if (results.length >= 40) break;
           }
           return results;
         })()
-      `) as { tag: string; text: string; ariaLabel: string; href: string; rect: { x: number; y: number; w: number; h: number } }[];
+      `) as { tag: string; text: string; ariaLabel: string; href: string; agentId: string; rect: { x: number; y: number; w: number; h: number } }[];
 
       for (const pe of pointerElements) {
         const label = (pe.ariaLabel || pe.text || `Clickable ${pe.tag}`).replace(/\s+/g, ' ').trim().slice(0, 100);
@@ -151,12 +165,12 @@ export class DOMTools {
         if (pe.href) seenHrefs.add(pe.href);
 
         const id = `element-${randomUUID().slice(0, 8)}`;
-        // Build a locator from the element's text or position
-        const searchText = pe.text.slice(0, 40).replace(/"/g, '\\"');
-        const locator = searchText.length > 2
-          ? this.page.locator(`${pe.tag}:visible`).filter({ hasText: searchText }).first()
-          : this.page.locator(`${pe.tag}[aria-label="${pe.ariaLabel.replace(/"/g, '\\"')}"]`).first();
-        this.elementStore.set(id, locator);
+        // Re-tag with our canonical ID and use identity-based locator
+        await this.page.evaluate(
+          `(() => { const el = document.querySelector('[data-agent-id="${pe.agentId}"]'); if (el) el.setAttribute('data-agent-id', '${id}'); })()`
+        ).catch(() => {});
+        const stableLocator = this.page.locator(`[data-agent-id="${id}"]`);
+        this.elementStore.set(id, stableLocator);
 
         regions.push({
           id,
@@ -365,20 +379,24 @@ export class DOMTools {
 
   /**
    * Wait for the page to stabilize after an action.
-   * Uses navigation detection with fallback to networkidle.
-   * Replaces hardcoded sleeps throughout the codebase.
+   * Strategy: wait for domcontentloaded (fast), then race a short networkidle
+   * against a fixed ceiling so noisy sites (Amazon, YouTube) don't stall us.
    */
-  async waitForStability(timeoutMs: number = 5000): Promise<void> {
+  async waitForStability(timeoutMs: number = 3000): Promise<void> {
     try {
-      // Race: either a navigation completes, or we settle for networkidle
+      // 1. If a navigation is in flight, wait for DOM to be ready (fast)
       await Promise.race([
-        this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: timeoutMs })
-          .then(() => this.page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {})),
-        this.page.waitForLoadState('networkidle', { timeout: timeoutMs }).catch(() => {}),
+        this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: timeoutMs }).catch(() => {}),
+        new Promise(r => setTimeout(r, timeoutMs)),
+      ]);
+
+      // 2. Brief networkidle attempt — but cap at 1.5s so noisy sites don't hang
+      await Promise.race([
+        this.page.waitForLoadState('networkidle', { timeout: 1500 }).catch(() => {}),
+        new Promise(r => setTimeout(r, 1500)),
       ]);
     } catch {
-      // If everything times out, the page is likely already stable (no navigation happened).
-      // A brief pause covers minor DOM updates like modals or dropdowns.
+      // If everything fails, a short pause covers minor DOM updates
       await new Promise(r => setTimeout(r, 300));
     }
   }

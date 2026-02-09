@@ -16,7 +16,7 @@ export interface Region {
 
 export interface StepLog {
   step: number;
-  phase: 'OBSERVE' | 'DECIDE' | 'ACT' | 'VERIFY';
+  phase: 'OBSERVE' | 'DECIDE' | 'ACT' | 'VERIFY' | 'NAVIGATE' | 'PLANNING' | 'SYNTHESIS';
   message: string;
   timestamp: string;
   error?: string;

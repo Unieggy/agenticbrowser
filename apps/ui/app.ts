@@ -229,19 +229,25 @@ function handleCancel(): void {
 function addLogEntry(phase: string, message: string, error?: string): void {
   const entry = document.createElement('div');
   entry.className = `log-entry ${phase}`;
-  
+
   const timestamp = new Date().toLocaleTimeString();
   const timestampEl = document.createElement('span');
   timestampEl.className = 'log-timestamp';
   timestampEl.textContent = timestamp;
-  
+
   const messageEl = document.createElement('span');
   messageEl.className = 'log-message';
-  messageEl.textContent = error ? `${message}: ${error}` : message;
-  
+
+  // Synthesis results get special rendering with pre-wrap for formatting
+  if (phase === 'synthesis' && message.startsWith('RESEARCH FINDINGS:')) {
+    messageEl.textContent = message;
+  } else {
+    messageEl.textContent = error ? `${message}: ${error}` : message;
+  }
+
   entry.appendChild(timestampEl);
   entry.appendChild(messageEl);
-  
+
   stepLog.appendChild(entry);
   stepLog.scrollTop = stepLog.scrollHeight;
 }

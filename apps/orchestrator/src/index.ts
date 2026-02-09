@@ -503,6 +503,27 @@ class Orchestrator {
           },
         });
 
+        // ===== FAST-FORWARD: Skip steps that the agent already accomplished =====
+        const currentUrl = session.domTools.getUrl();
+        while (session.planIndex < session.plan.length) {
+          const nextStep = session.plan[session.planIndex];
+          if (this.isStepLikelyDone(nextStep.title, currentUrl, nextStep.targetUrl)) {
+            console.log(`[fast-forward] Skipping "${nextStep.title}" — already accomplished (URL: ${currentUrl})`);
+            session.completedSteps.push(nextStep.title);
+            session.planIndex++;
+            this.sendMessage(wsClient, {
+              type: 'status',
+              data: {
+                sessionId,
+                status: 'running',
+                message: `Objective skipped (already done): ${nextStep.title}`,
+              },
+            });
+          } else {
+            break;
+          }
+        }
+
         // Move on to next objective in the same session run
         continue;
       }
@@ -541,25 +562,28 @@ class Orchestrator {
       return;
     }
 
-    // Synthesize research findings if notes were collected
-    if (session.researchNotes.length > 0) {
+    // Synthesize research findings — only for research-type tasks with meaningful notes
+    const isResearchTask = /research|find|compare|recommend|summarize|review|best|top|look up|what is|who is/i.test(session.task);
+    const meaningfulNotes = session.researchNotes.filter(n => n.length > 100);
+
+    if (isResearchTask && meaningfulNotes.length > 0) {
       this.sendMessage(wsClient, {
         type: 'log',
         data: {
           step: session.stepCount + 1,
-          phase: 'DECIDE',
+          phase: 'SYNTHESIS' as any,
           message: 'Synthesizing research findings...',
           timestamp: new Date().toISOString(),
         },
       });
 
-      const synthesis = await this.synthesizeFindings(session.task, session.researchNotes);
+      const synthesis = await this.synthesizeFindings(session.task, meaningfulNotes);
 
       this.sendMessage(wsClient, {
         type: 'log',
         data: {
           step: session.stepCount + 1,
-          phase: 'DECIDE',
+          phase: 'SYNTHESIS' as any,
           message: `RESEARCH FINDINGS:\n\n${synthesis}`,
           timestamp: new Date().toISOString(),
         },
@@ -573,13 +597,56 @@ class Orchestrator {
       data: {
         sessionId,
         status: 'completed',
-        message: session.researchNotes.length > 0
+        message: (isResearchTask && meaningfulNotes.length > 0)
           ? 'All objectives completed. Research synthesis sent above. Browser is still open — click Stop when done.'
           : 'All objectives completed. Browser is still open — click Stop when done.',
       },
     });
     return;
 
+  }
+
+  /**
+   * Check if a plan step is already accomplished by the current page state.
+   * Used to fast-forward past steps the agent completed ahead of schedule.
+   */
+  private isStepLikelyDone(stepTitle: string, currentUrl: string, targetUrl?: string): boolean {
+    const title = stepTitle.toLowerCase();
+    const url = currentUrl.toLowerCase();
+
+    // If step has a targetUrl and we're already past it (on a deeper page), skip
+    if (targetUrl) {
+      try {
+        const targetHost = new URL(targetUrl).hostname;
+        if (url.includes(targetHost)) {
+          // We're on the same site — if URL is deeper or has query params, step is done
+          if (url.includes('search') || url.includes('results') || url.includes('watch') ||
+              url.includes('/in/') || url.includes('/p/') || url.length > targetUrl.length + 20) {
+            return true;
+          }
+        }
+      } catch {}
+    }
+
+    // "Navigate to X" — check if we're on that site
+    if (title.includes('navigate')) {
+      if (title.includes('youtube') && url.includes('youtube.com')) return true;
+      if (title.includes('linkedin') && url.includes('linkedin.com')) return true;
+      if (title.includes('google') && url.includes('google.com')) return true;
+    }
+
+    // "Search" / "Type search" / "Initiate search" — check if URL has search results
+    if (title.includes('search') || title.includes('type') && title.includes('query') || title.includes('initiate')) {
+      if (url.includes('search') || url.includes('results') || url.includes('?q=') || url.includes('query=')) return true;
+    }
+
+    // "Click the video/article/profile" — check if we're on a detail page
+    if (title.includes('click')) {
+      if (url.includes('watch?v=') || url.includes('/video/')) return true;
+      if (url.includes('/in/') && url.includes('linkedin.com')) return true;
+    }
+
+    return false;
   }
 
   private async synthesizeFindings(task: string, researchNotes: string[]): Promise<string> {

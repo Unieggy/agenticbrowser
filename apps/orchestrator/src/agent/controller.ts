@@ -372,8 +372,8 @@ export class AgentController {
         const verification = await this.verifier.verify(validatedDecision.action);
         await onStep('VERIFY', verification.message);
 
-        // Wait for page to stabilize after action (navigation or DOM update)
-        await this.domTools.waitForStability();
+        // Note: waitForStability() is already called in the onStep('ACT') callback.
+        // No duplicate call here — just capture the post-action state.
         urlAfter = this.domTools.getUrl();
         titleAfter = await this.domTools.getTitle();
         textAfter = await this.domTools.getPageTextSnippet(400);
